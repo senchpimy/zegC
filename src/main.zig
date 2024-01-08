@@ -14,8 +14,12 @@ const stdout = std.io.getStdOut().writer();
 //const stdin = std.io.getStdIn();
 var buf: [100]u8 = undefined;
 var promt_v: Prompt = .start;
+//var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+var variables = std.StringHashMap(Variable).init(std.heap.page_allocator);
 
 pub fn main() !void {
+    //defer arena.deinit();
+    //try variables.put("st", Variable{ .type = .int, .value = 9 });
     var tty = try fs.cwd().openFile("/dev/tty", fs.File.OpenFlags{ .mode = .read_write });
     defer tty.close();
 
@@ -41,10 +45,10 @@ pub fn main() !void {
         if (char == '\x1B') {
             _ = try tty.read(&buffer);
             _ = try tty.read(&buffer);
-            if (buffer[0] == 'D') {
-                debug.print("Izquierda\r\n", .{});
-            } else if (buffer[0] == 'C') {
-                debug.print("Derecha\r\n", .{});
+            if (buffer[0] == 'D') { //izq
+                std.debug.print("\x1B[D", .{});
+            } else if (buffer[0] == 'C') { //der
+                std.debug.print("\x1B[C", .{});
             } else if (buffer[0] == 'A') {
                 debug.print("Arriba\r\n", .{});
             } else if (buffer[0] == 'B') {
@@ -53,28 +57,32 @@ pub fn main() !void {
                 //Handle esc
                 debug.print("cahr {d}\r\n", .{buffer[0]});
             }
-            debug.print("input: escape\r\n", .{});
+            //\033[6;3H
+            //
+            //debug.print("input: escape\r\n", .{});
         } else if (char == 3) {
             try os.tcsetattr(tty.handle, .FLUSH, original);
             os.exit(0);
         } else if (std.ascii.isASCII(char)) {
-            if (char == '\n' or char == '\r') {
+            if (char == '\r') {
+                if (buf[index - 1] == ';') {
+                    _ = try parse_str(&buf);
+                    promt_v = .start;
+                    @memset(&buf, 0);
+                    try stdout.print("\n", .{});
+                    continue;
+                }
                 promt_v = .cont;
                 try prompt();
                 continue;
             }
-            _ = get_string(index, char);
+            get_string(index, char);
             debug.print("{c}", .{char});
             index += 1;
         } else {
             debug.print("novalue: {} {s}\r\n", .{ buffer[0], buffer });
         }
     }
-    //while (true) {
-    //    var str = try get_string();
-    //    var val = try parse_str(str);
-    //    std.debug.print("{any}", .{val});
-    //}
 }
 
 fn prompt() !void {
@@ -93,19 +101,6 @@ fn prompt() !void {
 
 fn get_string(index: u32, char: u8) void {
     buf[index] = char;
-
-    //_ = try stdout.write(">> ");
-
-    //while (true) {
-    //    _ = try stdin_r.readUntilDelimiterOrEof(buf[0..], 'a');
-    //    //stdin.
-    //    std.debug.print("b: {any}\n", .{buf});
-    //}
-    //_ = try stdin_r.readUntilDelimiterOrEof(buf[0..], '\n');
-
-    //var found = std.mem.indexOf(u8, buf[0..], "\n").?;
-
-    //return buf[0..];
 }
 
 fn parse_str(str: []u8) !i8 {
