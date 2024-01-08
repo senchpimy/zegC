@@ -16,7 +16,6 @@ var buf: [100]u8 = undefined;
 var promt_v: Prompt = .start;
 
 pub fn main() !void {
-    @memset(&buf, 0);
     var tty = try fs.cwd().openFile("/dev/tty", fs.File.OpenFlags{ .mode = .read_write });
     defer tty.close();
 
@@ -40,39 +39,32 @@ pub fn main() !void {
         _ = try tty.read(&buffer);
         var char = buffer[0];
         if (char == '\x1B') {
-            //_ = try tty.read(&buffer);
-            //_ = try tty.read(&buffer);
-            //if (buffer[0] == 'D') {
-            //    debug.print("Izquierda\r\n", .{});
-            //} else if (buffer[0] == 'C') {
-            //    debug.print("Derecha\r\n", .{});
-            //} else if (buffer[0] == 'A') {
-            //    debug.print("Arriba\r\n", .{});
-            //} else if (buffer[0] == 'B') {
-            //    debug.print("Abajo\r\n", .{});
-            //} else {
-            //    //Handle esc
-            //    debug.print("cahr {d}\r\n", .{buffer[0]});
-            //}
-            //debug.print("input: escape\r\n", .{});
-        } else if (char == 3) { //Ctrl+c
+            _ = try tty.read(&buffer);
+            _ = try tty.read(&buffer);
+            if (buffer[0] == 'D') {
+                debug.print("Izquierda\r\n", .{});
+            } else if (buffer[0] == 'C') {
+                debug.print("Derecha\r\n", .{});
+            } else if (buffer[0] == 'A') {
+                debug.print("Arriba\r\n", .{});
+            } else if (buffer[0] == 'B') {
+                debug.print("Abajo\r\n", .{});
+            } else {
+                //Handle esc
+                debug.print("cahr {d}\r\n", .{buffer[0]});
+            }
+            debug.print("input: escape\r\n", .{});
+        } else if (char == 3) {
             try os.tcsetattr(tty.handle, .FLUSH, original);
             os.exit(0);
         } else if (std.ascii.isASCII(char)) {
-            if (char == '\n') {
-                //if (buf[index] == ';') {
-                //    @memset(&buf, 0);
-                //    debug.print("\r\n", .{});
-                //    continue;
-                //}
-                //debug.print("char {d}", .{buf[0]});
+            if (char == '\n' or char == '\r') {
                 promt_v = .cont;
                 try prompt();
-                try stdout.print("test", .{});
                 continue;
             }
             _ = get_string(index, char);
-            try stdout.print("{c}", .{char});
+            debug.print("{c}", .{char});
             index += 1;
         } else {
             debug.print("novalue: {} {s}\r\n", .{ buffer[0], buffer });
