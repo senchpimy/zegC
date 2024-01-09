@@ -5,11 +5,21 @@ const io = std.io;
 const mem = std.mem;
 const os = std.os;
 
+const Payload = union {
+    int: i16,
+    char: u8,
+    long: i32,
+    boolean: bool,
+    void: u8,
+    double: i64,
+    float: f32,
+};
+
 const primitive_operations = [_][]const u8{ "+", "-", "*", "/", "%", "&&", "||", "!", "==", "!=", ">", "<", ">=", "<=", "&", "|", "^", "~", "<<", ">>" };
 const Operation = enum { add, subs, mul, div, mod, and_o };
 
-const primitive_types = [_][]const u8{ "int", "char", "long", "bool", "void", "double" };
-const Type = enum { int, char, long, bool, void, double };
+const primitive_types = [_][]const u8{ "int", "char", "long", "bool", "void", "double", "float" };
+const Type = enum { int, char, long, bool, void, double, float };
 
 const asignation_operations = [_][]const u8{ "=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "<<=", ">>=" };
 const Assig = enum {
@@ -28,10 +38,10 @@ const Assig = enum {
 
 const Prompt = enum { start, none, cont };
 const ParsingError = error{Type};
-const DataType = enum { TypeDeclaration, String, Assignation };
+const DataType = enum { TypeDeclaration, String, Assignation, Value };
 const Instruction = struct { type: DataType, string: []u8, index: i16 };
 
-const Variable = struct { type: Type, value: u8 };
+const Variable = struct { type: Type, value: Payload };
 const stdout = std.io.getStdOut().writer();
 //const stdin = std.io.getStdIn();
 var buf: [100]u8 = undefined;
@@ -83,8 +93,9 @@ pub fn main() !void {
             //
             //debug.print("input: escape\r\n", .{});
         } else if (char == 3) {
-            try os.tcsetattr(tty.handle, .FLUSH, original);
-            os.exit(0);
+            break;
+            //try os.tcsetattr(tty.handle, .FLUSH, original);
+            //os.exit(0);
         } else if (std.ascii.isASCII(char)) {
             if (char == '\r') {
                 if (buf[mb_index - 1] == ';') {
@@ -108,6 +119,7 @@ pub fn main() !void {
             debug.print("novalue: {} {s}\r\n", .{ buffer[0], buffer });
         }
     }
+    try os.tcsetattr(tty.handle, .FLUSH, original);
 }
 
 fn prompt() !void {
@@ -130,53 +142,77 @@ fn get_string(index: u32, char: u8) void {
 
 fn parse_str() !void {
     var isn = try create_instruction();
-    _ = isn;
+    var slice = isn.items;
+    var len = slice.len;
+    if (slice[0].type == .TypeDeclaration) {
+        if (len > 2) { //More than one variable declaration or declaration and assignation
+            switch (slice[2].type) {
+                .String => {},
+                .Assignation => {},
+                else => {},
+            }
+
+            try stdout.print("\n{any}", .{slice});
+        } else { //Justa a single virable declaration
+            var t = match_type(slice[0].index); //Index of type
+            var p = match_payload(t);
+            var v: Variable = Variable{ .type = t, .value = p };
+            try variables.put(slice[1].string, v);
+            try stdout.print("\nCreated variable! {any}", .{v});
+        }
+    }
 }
 
 fn create_instruction() !std.ArrayList(Instruction) {
     //std.heap.page_allocator);
-    var list = std.ArrayList(Instruction).init(std.heap.page_allocator);
-    var splits = std.mem.split(u8, buf[0 .. mb_index - 1], " ");
-    var len: usize = 0;
-    while (splits.next()) |_| {
-        len += 1;
-    }
-    splits.reset();
-    while (splits.next()) |str| {
-        var stri = std.ArrayList(u8).init(std.heap.page_allocator);
-        try stri.resize(str.len);
-        @memcpy(stri.items, str);
-        var string = try stri.toOwnedSlice();
-        var type_index: i16 = 0;
-        var next = false;
-        for (primitive_types) |typ| {
-            if (std.mem.eql(u8, string, typ)) {
-                try list.append(Instruction{ .type = .TypeDeclaration, .string = string, .index = type_index }); //Unesecary string
-                next = true;
-                break;
+    var list = std.ArrayList(Instruction).init(std.heap.page_allocator); //Create struct for multiple lines
+    var instructions = std.mem.tokenizeScalar(u8, buf[0..mb_index], ';');
+    while (instructions.next()) |intrs| {
+        var splits = std.mem.split(u8, intrs, " "); //Dont be dependent on spaces
+        var len: usize = 0;
+        while (splits.next()) |_| {
+            len += 1;
+        }
+        splits.reset();
+        while (splits.next()) |str| {
+            if (str.len == 0) {
+                continue;
             }
-            type_index += 1;
-        } else {
-            type_index = 0;
-        }
-        //Not a type
-        for (asignation_operations) |typ| {
-            if (std.mem.eql(u8, string, typ)) {
-                try list.append(Instruction{ .type = .Assignation, .string = string, .index = type_index }); //Unesecary string
-                next = true;
-                break;
+            var stri = std.ArrayList(u8).init(std.heap.page_allocator);
+            try stri.resize(str.len);
+            @memcpy(stri.items, str);
+            var string = try stri.toOwnedSlice();
+            var type_index: i16 = 0;
+            var next = false;
+            for (primitive_types) |typ| {
+                if (std.mem.eql(u8, string, typ)) {
+                    try list.append(Instruction{ .type = .TypeDeclaration, .string = string, .index = type_index }); //Unesecary string
+                    next = true;
+                    break;
+                }
+                type_index += 1;
+            } else {
+                type_index = 0;
             }
-            type_index += 1;
-        } else {
-            type_index = 0;
+            //Not a type
+            for (asignation_operations) |typ| {
+                if (std.mem.eql(u8, string, typ)) {
+                    try list.append(Instruction{ .type = .Assignation, .string = string, .index = type_index }); //Unesecary string
+                    next = true;
+                    break;
+                }
+                type_index += 1;
+            } else {
+                type_index = 0;
+            }
+            //Not a assignation
+            //Then is a value/variable
+            // check for while, for, if, switch, funct and other
+            if (next) {
+                continue;
+            }
+            try list.append(Instruction{ .type = .String, .string = string, .index = -1 }); //Unesecary string
         }
-        //Not a assignation
-        //Then is a value/variable
-        // check for while, for, if, switch, funct and other
-        if (next) {
-            continue;
-        }
-        try list.append(Instruction{ .type = .String, .string = string, .index = -1 }); //Unesecary string
     }
     return list;
 }
@@ -202,13 +238,76 @@ fn match_type(index: i16) Type {
         5 => {
             v_type = .double;
         },
+        6 => {
+            v_type = .float;
+        },
         else => {
             //std.debug.print("\n '{s}' is not a type", .{first});
             //return ParsingError.Type;
         },
     }
+    return v_type;
 }
 
 fn cmp_type(str: []const u8, index: usize) bool {
     return std.mem.eql(u8, str, primitive_types[index]);
+}
+
+fn match_payload(t: Type) Payload {
+    var p: Payload = undefined;
+    switch (t) {
+        .int => {
+            p = Payload{ .int = undefined };
+        },
+        .char => {
+            p = Payload{ .char = undefined };
+        },
+        .long => {
+            p = Payload{ .long = undefined };
+        },
+        .bool => {
+            p = Payload{ .boolean = undefined };
+        },
+        .void => {
+            p = Payload{ .void = undefined };
+        },
+        .double => {
+            p = Payload{ .double = undefined };
+        },
+        .float => {
+            p = Payload{ .float = undefined };
+        },
+    }
+    return p;
+}
+
+fn match_payload_value(t: Type, v: Instruction) Payload {
+    var p: Payload = undefined;
+    if (v.type != .Value) {
+        return p;
+    }
+    switch (t) {
+        .int => {
+            p = Payload{ .int = undefined };
+        },
+        .char => {
+            p = Payload{ .char = undefined };
+        },
+        .long => {
+            p = Payload{ .long = undefined };
+        },
+        .bool => {
+            p = Payload{ .boolean = undefined };
+        },
+        .void => {
+            p = Payload{ .void = undefined };
+        },
+        .double => {
+            p = Payload{ .double = undefined };
+        },
+        .float => {
+            p = Payload{ .float = undefined };
+        },
+    }
+    return p;
 }
