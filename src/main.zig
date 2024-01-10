@@ -5,21 +5,13 @@ const io = std.io;
 const mem = std.mem;
 const os = std.os;
 
-const Payload = union {
-    int: i16,
-    char: u8,
-    long: i32,
-    boolean: bool,
-    void: u8,
-    double: i64,
-    float: f32,
-};
+const Payload = union(Type) { int: i32, char: u8, long: i64, boolean: bool, void: u8, double: f64, float: f32 };
 
 const primitive_operations = [_][]const u8{ "+", "-", "*", "/", "%", "&&", "||", "!", "==", "!=", ">", "<", ">=", "<=", "&", "|", "^", "~", "<<", ">>" };
 const Operation = enum { add, subs, mul, div, mod, and_o };
 
 const primitive_types = [_][]const u8{ "int", "char", "long", "bool", "void", "double", "float" };
-const Type = enum { int, char, long, bool, void, double, float };
+const Type = enum { int, char, long, boolean, void, double, float };
 
 const asignation_operations = [_][]const u8{ "=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "<<=", ">>=" };
 const Assig = enum {
@@ -38,10 +30,10 @@ const Assig = enum {
 
 const Prompt = enum { start, none, cont };
 const ParsingError = error{Type};
-const DataType = enum { TypeDeclaration, String, Assignation, Value };
+const DataType = enum { TypeDeclaration, Assignation, Value, Operation };
 const Instruction = struct { type: DataType, string: []u8, index: i16 };
 
-const Variable = struct { type: Type, value: Payload };
+const Variable = struct { type: Type, value: Payload }; //Repetition?
 const stdout = std.io.getStdOut().writer();
 //const stdin = std.io.getStdIn();
 var buf: [100]u8 = undefined;
@@ -120,6 +112,11 @@ pub fn main() !void {
         }
     }
     try os.tcsetattr(tty.handle, .FLUSH, original);
+    var iter = variables.iterator();
+    debug.print("\n", .{});
+    while (iter.next()) |key| {
+        debug.print("VARIABLE {s} {any}\n", .{ key.key_ptr.*, key.value_ptr.* });
+    }
 }
 
 fn prompt() !void {
@@ -147,8 +144,12 @@ fn parse_str() !void {
     if (slice[0].type == .TypeDeclaration) {
         if (len > 2) { //More than one variable declaration or declaration and assignation
             switch (slice[2].type) {
-                .String => {},
-                .Assignation => {},
+                .Assignation => {
+                    var new_var_type = match_type(slice[0].index);
+                    var f = try match_payload_value(new_var_type, slice[3]);
+                    var new_var = Variable{ .type = new_var_type, .value = f };
+                    try variables.put(slice[1].string, new_var);
+                },
                 else => {},
             }
 
@@ -211,7 +212,7 @@ fn create_instruction() !std.ArrayList(Instruction) {
             if (next) {
                 continue;
             }
-            try list.append(Instruction{ .type = .String, .string = string, .index = -1 }); //Unesecary string
+            try list.append(Instruction{ .type = .Value, .string = string, .index = -1 }); //Unesecary string
         }
     }
     return list;
@@ -230,7 +231,7 @@ fn match_type(index: i16) Type {
             v_type = .long;
         },
         3 => {
-            v_type = .bool;
+            v_type = .boolean;
         },
         4 => {
             v_type = .void;
@@ -265,7 +266,7 @@ fn match_payload(t: Type) Payload {
         .long => {
             p = Payload{ .long = undefined };
         },
-        .bool => {
+        .boolean => {
             p = Payload{ .boolean = undefined };
         },
         .void => {
@@ -281,7 +282,9 @@ fn match_payload(t: Type) Payload {
     return p;
 }
 
-fn match_payload_value(t: Type, v: Instruction) Payload {
+fn match_payload_value(t: Type, v: Instruction) !Payload {
+    std.debug.print("TYpe {any}\n", .{t});
+    std.debug.print("Ins {any}\n", .{v});
     var p: Payload = undefined;
     if (v.type != .Value) {
         return p;
@@ -296,7 +299,7 @@ fn match_payload_value(t: Type, v: Instruction) Payload {
         .long => {
             p = Payload{ .long = undefined };
         },
-        .bool => {
+        .boolean => {
             p = Payload{ .boolean = undefined };
         },
         .void => {
@@ -309,5 +312,67 @@ fn match_payload_value(t: Type, v: Instruction) Payload {
             p = Payload{ .float = undefined };
         },
     }
+
+    switch (v.string[0]) {
+        //'\'' or '"' => { //char||[]char
+        '\'' => { //char||[]char
+
+        },
+        else => {
+            if (std.ascii.isDigit(v.string[0])) {
+                switch (t) {
+                    .int => {
+                        p.int = try std.fmt.parseInt(i32, v.string, 10);
+                    },
+                    .char => {},
+                    .long => {
+                        p.int = try std.fmt.parseInt(i32, v.string, 10);
+                    },
+                    .boolean => {},
+                    .double => {},
+                    .float => {},
+                    else => {}, // handle any other types
+                }
+            } else {
+                if (variables.contains(v.string)) { //Asignacion a variable
+                    var tmp = variables.get(v.string).?;
+                    _ = tmp;
+                    //switch (tmp.value) {
+                    //    .int => |val| switch (t) {
+                    //        .int => p.int = val,
+                    //        .double => p.double = @as(f64, val),
+                    //        else => {}, // handle any other types
+                    //    },
+                    //    .char => |val| switch (t) {
+                    //        .char => p.char = val,
+                    //        else => {}, // handle any other types
+                    //    },
+                    //    .long => |val| switch (t) {
+                    //        .long => p.long = val,
+                    //        .double => p.double = @as(f64, val),
+                    //        else => {}, // handle any other types
+                    //    },
+                    //    .boolean => |val| switch (t) {
+                    //        .boolean => p.boolean = val,
+                    //        else => {}, // handle any other types
+                    //    },
+                    //    .double => |val| switch (t) {
+                    //        .double => p.double = val,
+                    //        .int => p.double = @as(i16, val),
+                    //        .long => p.long = @as(i64, val),
+                    //        else => {}, // handle any other types
+                    //    },
+                    //    .float => |val| switch (t) {
+                    //        .float => p.float = val,
+                    //        .int => p.float = @as(i32, val),
+                    //        else => {}, // handle any other types
+                    //    },
+                    //    else => {}, // handle any other types
+                    //}
+                }
+            }
+        },
+    }
+
     return p;
 }
