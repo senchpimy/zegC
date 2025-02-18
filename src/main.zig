@@ -4,7 +4,10 @@ const fs = std.fs;
 const io = std.io;
 const mem = std.mem;
 const os = std.os;
-
+const evaluate = @import("evaluate.zig");
+const c = @cImport({
+    @cInclude("termios.h");
+});
 const Payload = union(Type) { int: i32, char: u8, long: i64, boolean: bool, void: u8, double: f64, float: f32 };
 
 const primitive_operations = [_][]const u8{ "+", "-", "*", "/", "%", "&&", "||", "!", "==", "!=", ">", "<", ">=", "<=", "&", "|", "^", "~", "<<", ">>" };
@@ -45,27 +48,37 @@ var mb_index: u32 = 0; //main buffer index
 pub fn main() !void {
     //defer arena.deinit();
     //try variables.put("st", Variable{ .type = .int, .value = 9 });
+    var termios: std.os.linux.termios = undefined;
     var tty = try fs.cwd().openFile("/dev/tty", fs.File.OpenFlags{ .mode = .read_write });
     defer tty.close();
 
-    const original = try os.tcgetattr(tty.handle);
-    var raw = original;
-    raw.lflag &= ~@as(
-        os.linux.tcflag_t,
-        os.linux.ECHO | os.linux.ICANON | os.linux.ISIG | os.linux.IEXTEN,
-    );
-    raw.iflag &= ~@as(
-        os.linux.tcflag_t,
-        os.linux.IXON | os.linux.ICRNL | os.linux.BRKINT | os.linux.INPCK | os.linux.ISTRIP,
-    );
-    raw.cc[os.system.V.TIME] = 0;
-    raw.cc[os.system.V.MIN] = 1;
-    try os.tcsetattr(tty.handle, .FLUSH, raw);
+    const ret = std.os.linux.tcgetattr(tty.handle, &termios);
+    if (ret != 0) {
+        std.debug.print("tcgetattr failed with code {}\n", .{ret});
+        return error.TcgetattrFailed;
+    }
+
+    var raw = termios;
+
+    raw.lflag.ECHO = false;
+    raw.lflag.ICANON = false;
+    raw.lflag.ISIG = false;
+    raw.lflag.IEXTEN = false;
+
+    raw.iflag.IXON = false;
+    raw.iflag.ICRNL = false;
+    raw.iflag.BRKINT = false;
+    raw.iflag.INPCK = false;
+    raw.iflag.ISTRIP = false;
+
+    raw.cc[c.VTIME] = 0;
+    raw.cc[c.VMIN] = 1;
+    _ = os.linux.tcsetattr(tty.handle, .FLUSH, &raw);
     while (true) {
         try prompt();
         var buffer: [1]u8 = undefined;
         _ = try tty.read(&buffer);
-        var char = buffer[0];
+        const char = buffer[0];
         if (char == '\x1B') {
             _ = try tty.read(&buffer);
             _ = try tty.read(&buffer);
@@ -111,7 +124,7 @@ pub fn main() !void {
             debug.print("novalue: {} {s}\r\n", .{ buffer[0], buffer });
         }
     }
-    try os.tcsetattr(tty.handle, .FLUSH, original);
+    _ = os.linux.tcsetattr(tty.handle, .FLUSH, &termios);
     var iter = variables.iterator();
     debug.print("\n", .{});
     while (iter.next()) |key| {
@@ -138,16 +151,16 @@ fn get_string(index: u32, char: u8) void {
 }
 
 fn parse_str() !void {
-    var isn = try create_instruction();
-    var slice = isn.items;
-    var len = slice.len;
+    const isn = try create_instruction();
+    const slice = isn.items;
+    const len = slice.len;
     if (slice[0].type == .TypeDeclaration) {
         if (len > 2) { //More than one variable declaration or declaration and assignation
             switch (slice[2].type) {
                 .Assignation => {
-                    var new_var_type = match_type(slice[0].index);
-                    var f = try match_payload_value(new_var_type, slice[3]);
-                    var new_var = Variable{ .type = new_var_type, .value = f };
+                    const new_var_type = match_type(slice[0].index);
+                    const f = try match_payload_value(new_var_type, slice[3]);
+                    const new_var = Variable{ .type = new_var_type, .value = f };
                     try variables.put(slice[1].string, new_var);
                 },
                 else => {},
@@ -155,9 +168,10 @@ fn parse_str() !void {
 
             try stdout.print("\n{any}", .{slice});
         } else { //Justa a single virable declaration
-            var t = match_type(slice[0].index); //Index of type
-            var p = match_payload(t);
-            var v: Variable = Variable{ .type = t, .value = p };
+            evaluate.tes();
+            const t = match_type(slice[0].index); //Index of type
+            const p = match_payload(t);
+            const v: Variable = Variable{ .type = t, .value = p };
             try variables.put(slice[1].string, v);
             try stdout.print("\nCreated variable! {any}", .{v});
         }
@@ -182,7 +196,7 @@ fn create_instruction() !std.ArrayList(Instruction) {
             var stri = std.ArrayList(u8).init(std.heap.page_allocator);
             try stri.resize(str.len);
             @memcpy(stri.items, str);
-            var string = try stri.toOwnedSlice();
+            const string = try stri.toOwnedSlice();
             var type_index: i16 = 0;
             var next = false;
             for (primitive_types) |typ| {
@@ -335,7 +349,7 @@ fn match_payload_value(t: Type, v: Instruction) !Payload {
                 }
             } else {
                 if (variables.contains(v.string)) { //Asignacion a variable
-                    var tmp = variables.get(v.string).?;
+                    const tmp = variables.get(v.string).?;
                     _ = tmp;
                     //switch (tmp.value) {
                     //    .int => |val| switch (t) {
