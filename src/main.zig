@@ -4,6 +4,7 @@ const fs = std.fs;
 const io = std.io;
 const mem = std.mem;
 const os = std.os;
+const terminal = @import("terminal.zig");
 const evaluate = @import("evaluate.zig");
 const c = @cImport({
     @cInclude("termios.h");
@@ -11,10 +12,13 @@ const c = @cImport({
 const Payload = union(Type) { int: i32, char: u8, long: i64, boolean: bool, void: u8, double: f64, float: f32 };
 
 const primitive_operations = [_][]const u8{ "+", "-", "*", "/", "%", "&&", "||", "!", "==", "!=", ">", "<", ">=", "<=", "&", "|", "^", "~", "<<", ">>" };
-const Operation = enum { add, subs, mul, div, mod, and_o };
+const Operation = enum { add, subs, mul, div, mod, and_ };
 
 const primitive_types = [_][]const u8{ "int", "char", "long", "bool", "void", "double", "float" };
 const Type = enum { int, char, long, boolean, void, double, float };
+
+const keywords = [_][]const u8{ "if", "else", "for", "while", "do", "struct" };
+const Keywords = enum { if_, else_, for_, while_, do, struct_ };
 
 const asignation_operations = [_][]const u8{ "=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "<<=", ">>=" };
 const Assig = enum {
@@ -31,79 +35,49 @@ const Assig = enum {
     r_shf,
 };
 
-const Prompt = enum { start, none, cont };
 const ParsingError = error{Type};
-const DataType = enum { TypeDeclaration, Assignation, Value, Operation };
+const DataType = enum { TypeDeclaration, Assignation, Value, Operation, Keywords };
 const Instruction = struct { type: DataType, string: []u8, index: i16 };
 
 const Variable = struct { type: Type, value: Payload }; //Repetition?
 const stdout = std.io.getStdOut().writer();
 //const stdin = std.io.getStdIn();
 var buf: [100]u8 = undefined;
-var promt_v: Prompt = .start;
+var promt_v: terminal.Prompt = .start;
 //var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 var variables = std.StringHashMap(Variable).init(std.heap.page_allocator);
 var mb_index: u32 = 0; //main buffer index
 
 pub fn main() !void {
-    //defer arena.deinit();
-    //try variables.put("st", Variable{ .type = .int, .value = 9 });
-    var termios: std.os.linux.termios = undefined;
-    var tty = try fs.cwd().openFile("/dev/tty", fs.File.OpenFlags{ .mode = .read_write });
-    defer tty.close();
-
-    const ret = std.os.linux.tcgetattr(tty.handle, &termios);
-    if (ret != 0) {
-        std.debug.print("tcgetattr failed with code {}\n", .{ret});
-        return error.TcgetattrFailed;
+    var init = try terminal.initTerminal();
+    defer {
+        init.tty.close();
     }
 
-    var raw = termios;
-
-    raw.lflag.ECHO = false;
-    raw.lflag.ICANON = false;
-    raw.lflag.ISIG = false;
-    raw.lflag.IEXTEN = false;
-
-    raw.iflag.IXON = false;
-    raw.iflag.ICRNL = false;
-    raw.iflag.BRKINT = false;
-    raw.iflag.INPCK = false;
-    raw.iflag.ISTRIP = false;
-
-    raw.cc[c.VTIME] = 0;
-    raw.cc[c.VMIN] = 1;
-    _ = os.linux.tcsetattr(tty.handle, .FLUSH, &raw);
     while (true) {
-        try prompt();
+        try terminal.prompt(&promt_v);
         var buffer: [1]u8 = undefined;
-        _ = try tty.read(&buffer);
+        _ = try init.tty.read(&buffer);
         const char = buffer[0];
         if (char == '\x1B') {
-            _ = try tty.read(&buffer);
-            _ = try tty.read(&buffer);
-            if (buffer[0] == 'D') { //izq
+            _ = try init.tty.read(&buffer);
+            _ = try init.tty.read(&buffer);
+            if (buffer[0] == 'D') { // Izquierda
                 std.debug.print("\x1B[D", .{});
-            } else if (buffer[0] == 'C') { //der
+            } else if (buffer[0] == 'C') { // Derecha
                 std.debug.print("\x1B[C", .{});
             } else if (buffer[0] == 'A') {
                 debug.print("Arriba\r\n", .{});
             } else if (buffer[0] == 'B') {
                 debug.print("Abajo\r\n", .{});
             } else {
-                //Handle esc
                 debug.print("cahr {d}\r\n", .{buffer[0]});
             }
-            //\033[6;3H
-            //
-            //debug.print("input: escape\r\n", .{});
-        } else if (char == 3) {
+        } else if (char == 3) { // Ctrl+C
             break;
-            //try os.tcsetattr(tty.handle, .FLUSH, original);
-            //os.exit(0);
         } else if (std.ascii.isASCII(char)) {
-            if (char == '\r') {
-                if (buf[mb_index - 1] == ';') {
+            if (char == '\r') { // Enter
+                if (mb_index > 0 and buf[mb_index - 1] == ';') {
                     parse_str() catch |err| switch (err) {
                         else => {},
                     };
@@ -114,35 +88,31 @@ pub fn main() !void {
                     continue;
                 }
                 promt_v = .cont;
-                try prompt();
+                try terminal.prompt(&promt_v);
                 continue;
+            } else if (char == 0x7F or char == 0x08) { // Backspace (127 o 8)
+                if (mb_index > 0) {
+                    mb_index -= 1;
+                    buf[mb_index] = 0; // Limpiar posición
+                    // Mover cursor izquierda, borrar carácter, mantener posición
+                    try stdout.print("\x08 \x08", .{});
+                }
+            } else { // Carácter normal
+                if (mb_index < buf.len) {
+                    get_string(mb_index, char);
+                    try stdout.print("{c}", .{char});
+                    mb_index += 1;
+                }
             }
-            get_string(mb_index, char);
-            debug.print("{c}", .{char});
-            mb_index += 1;
         } else {
             debug.print("novalue: {} {s}\r\n", .{ buffer[0], buffer });
         }
     }
-    _ = os.linux.tcsetattr(tty.handle, .FLUSH, &termios);
+    _ = os.linux.tcsetattr(init.tty.handle, .FLUSH, &init.termios);
     var iter = variables.iterator();
     debug.print("\n", .{});
     while (iter.next()) |key| {
         debug.print("VARIABLE {s} {any}\n", .{ key.key_ptr.*, key.value_ptr.* });
-    }
-}
-
-fn prompt() !void {
-    switch (promt_v) {
-        .start => {
-            try stdout.print(">>>", .{});
-            promt_v = Prompt.none;
-        },
-        .cont => {
-            try stdout.print("\n...", .{});
-            promt_v = Prompt.none;
-        },
-        else => {},
     }
 }
 
@@ -221,8 +191,18 @@ fn create_instruction() !std.ArrayList(Instruction) {
                 type_index = 0;
             }
             //Not a assignation
+            //debug.print("No assignation ", args: anytype)
             //Then is a value/variable
             // check for while, for, if, switch, funct and other
+            for (keywords) |kw| {
+                if (std.mem.eql(u8, string, kw)) {
+                    try list.append(Instruction{ .type = .Keywords, .string = string, .index = type_index }); //Unesecary string
+                    next = true;
+                    debug.print("Keyword {s}", .{string});
+                    break;
+                }
+            }
+
             if (next) {
                 continue;
             }
