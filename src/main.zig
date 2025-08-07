@@ -9,13 +9,13 @@ const evaluate = @import("evaluate.zig");
 const c = @cImport({
     @cInclude("termios.h");
 });
-const Payload = union(Type) { int: i32, char: u8, long: i64, boolean: bool, void: u8, double: f64, float: f32 };
+pub const Payload = union(Type) { int: i32, char: u8, long: i64, boolean: bool, void: u8, double: f64, float: f32 };
 
 const primitive_operations = [_][]const u8{ "+", "-", "*", "/", "%", "&&", "||", "!", "==", "!=", ">", "<", ">=", "<=", "&", "|", "^", "~", "<<", ">>" };
 const Operation = enum { add, subs, mul, div, mod, and_ };
 
-const primitive_types = [_][]const u8{ "int", "char", "long", "bool", "void", "double", "float" };
-const Type = enum { int, char, long, boolean, void, double, float };
+pub const primitive_types = [_][]const u8{ "int", "char", "long", "bool", "void", "double", "float" };
+pub const Type = enum { int, char, long, boolean, void, double, float };
 
 const keywords = [_][]const u8{ "if", "else", "for", "while", "do", "struct" };
 const Keywords = enum { if_, else_, for_, while_, do, struct_ };
@@ -36,20 +36,30 @@ const Assig = enum {
 };
 
 const ParsingError = error{Type};
-const DataType = enum { TypeDeclaration, Assignation, Value, Operation, Keywords };
-const Instruction = struct { type: DataType, string: []u8, index: i16 };
+pub const DataType = enum { TypeDeclaration, Assignation, Value, Operation, Keywords };
+pub const Instruction = struct { type: DataType, string: []u8, index: i16 };
 
-const Variable = struct { type: Type, value: Payload }; //Repetition?
+pub const Variable = struct { type: Type, value: Payload }; //Repetition?
 const stdout = std.io.getStdOut().writer();
 //const stdin = std.io.getStdIn();
-var buf: [100]u8 = undefined;
+pub var buf: [100]u8 = undefined;
 var promt_v: terminal.Prompt = .start;
 //var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 var variables = std.StringHashMap(Variable).init(std.heap.page_allocator);
-var mb_index: u32 = 0; //main buffer index
+pub var mb_index: u32 = 0; //main buffer index
 
 pub fn main() !void {
-    var init = try terminal.initTerminal();
+    var init = terminal.initTerminal() catch |err| switch (err) {
+        error.NoTty => {
+            // Handle the case where there is no TTY
+            // For example, you could read from stdin
+            // and print to stdout without terminal-specific features.
+            // For now, we'll just exit gracefully.
+            std.debug.print("No TTY available. Exiting.\n", .{});
+            return;
+        },
+        else => |e| return e,
+    };
     defer {
         init.tty.close();
     }
@@ -148,12 +158,12 @@ fn parse_str() !void {
     }
 }
 
-fn create_instruction() !std.ArrayList(Instruction) {
+pub fn create_instruction() !std.ArrayList(Instruction) {
     //std.heap.page_allocator);
     var list = std.ArrayList(Instruction).init(std.heap.page_allocator); //Create struct for multiple lines
     var instructions = std.mem.tokenizeScalar(u8, buf[0..mb_index], ';');
     while (instructions.next()) |intrs| {
-        var splits = std.mem.split(u8, intrs, " "); //Dont be dependent on spaces
+        var splits = std.mem.splitScalar(u8, intrs, ' '); //Dont be dependent on spaces
         var len: usize = 0;
         while (splits.next()) |_| {
             len += 1;
@@ -212,7 +222,7 @@ fn create_instruction() !std.ArrayList(Instruction) {
     return list;
 }
 
-fn match_type(index: i16) Type {
+pub fn match_type(index: i16) Type {
     var v_type: Type = undefined;
     switch (index) {
         0 => {
@@ -248,7 +258,7 @@ fn cmp_type(str: []const u8, index: usize) bool {
     return std.mem.eql(u8, str, primitive_types[index]);
 }
 
-fn match_payload(t: Type) Payload {
+pub fn match_payload(t: Type) Payload {
     var p: Payload = undefined;
     switch (t) {
         .int => {
@@ -276,7 +286,7 @@ fn match_payload(t: Type) Payload {
     return p;
 }
 
-fn match_payload_value(t: Type, v: Instruction) !Payload {
+pub fn match_payload_value(t: Type, v: Instruction) !Payload {
     std.debug.print("TYpe {any}\n", .{t});
     std.debug.print("Ins {any}\n", .{v});
     var p: Payload = undefined;

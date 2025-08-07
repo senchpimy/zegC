@@ -15,7 +15,10 @@ const c = @cImport({
 
 pub fn initTerminal() !struct { tty: fs.File, termios: os.linux.termios } {
     var termios: std.os.linux.termios = undefined;
-    const tty = try fs.cwd().openFile("/dev/tty", fs.File.OpenFlags{ .mode = .read_write });
+    const tty = fs.cwd().openFile("/dev/tty", fs.File.OpenFlags{ .mode = .read_write }) catch |err| switch (err) {
+        error.NoDevice => return error.NoTty,
+        else => return err,
+    };
 
     const ret = std.os.linux.tcgetattr(tty.handle, &termios);
     if (ret != 0) {

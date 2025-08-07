@@ -62,9 +62,18 @@ pub fn build(b: *std.Build) void {
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
 
+    const new_tests = b.addTest(.{
+        .root_source_file = .{ .cwd_relative = "src/tests.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const run_new_tests = b.addRunArtifact(new_tests);
+
     // Similar to creating the run step earlier, this exposes a `test` step to
     // the `zig build --help` menu, providing a way for the user to request
     // running the unit tests.
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
+    test_step.dependOn(&run_new_tests.step);
 }
