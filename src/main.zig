@@ -1,4 +1,3 @@
-// main.zig
 const std = @import("std");
 const debug = std.debug;
 const fs = std.fs;
@@ -9,17 +8,16 @@ const os = std.os;
 const terminal = @import("terminal.zig");
 const evaluate = @import("evaluate.zig");
 const lexer = @import("lexer.zig");
+const types = @import("types.zig");
 
 const c = @cImport({
     @cInclude("termios.h");
 });
 
-pub const Variable = struct { type: lexer.Type, value: lexer.Payload }; //Repetition?
-
 const stdout = std.io.getStdOut().writer();
 pub var buf: [100]u8 = undefined;
 var promt_v: terminal.Prompt = .start;
-var variables = std.StringHashMap(Variable).init(std.heap.page_allocator);
+var variables = std.StringHashMap(types.Variable).init(std.heap.page_allocator);
 pub var mb_index: u32 = 0; //main buffer index
 
 pub fn main() !void {
@@ -118,13 +116,13 @@ fn parse_str() !void {
         if (slice.len > 3 and slice[2].type == .Assignation) {
             const new_var_type = lexer.match_type(slice[0].index);
             const f = try match_payload_value(new_var_type, slice[3]);
-            const new_var = Variable{ .type = new_var_type, .value = f };
+            const new_var = types.Variable{ .type = new_var_type, .value = f };
             try variables.put(slice[1].string, new_var);
             try stdout.print("\nVariable '{s}' creada con valor.", .{slice[1].string});
         } else {
             const t = lexer.match_type(slice[0].index);
             const p = lexer.match_payload(t);
-            const v: Variable = Variable{ .type = t, .value = p };
+            const v: types.Variable = types.Variable{ .type = t, .value = p };
             try variables.put(slice[1].string, v);
             try stdout.print("\nVariable '{s}' declarada.", .{slice[1].string});
         }
