@@ -35,7 +35,8 @@ fn dupStr(s: []const u8) ![]u8 {
 }
 
 pub fn create_instruction(buffer: []const u8) !std.ArrayList(types.Instruction) {
-    var list = std.ArrayList(types.Instruction).init(std.heap.page_allocator);
+    const allocator = std.heap.page_allocator;
+    var list = std.ArrayList(types.Instruction){};
 
     var i: usize = 0;
     const n = buffer.len;
@@ -91,7 +92,7 @@ pub fn create_instruction(buffer: []const u8) !std.ArrayList(types.Instruction) 
                 return error.InvalidCharacter;
             i += 1;
             const s = try dupStr(buffer[start..i]);
-            try list.append(.{
+            try list.append(allocator, .{
                 .type = .Value,
                 .string = s,
                 .index = -1,
@@ -109,7 +110,7 @@ pub fn create_instruction(buffer: []const u8) !std.ArrayList(types.Instruction) 
             // Tipos primitivos
             const ti = matchesAny(s, primitive_types);
             if (ti >= 0) {
-                try list.append(.{
+                try list.append(allocator, .{
                     .type = .TypeDeclaration,
                     .string = s,
                     .index = ti,
@@ -120,7 +121,7 @@ pub fn create_instruction(buffer: []const u8) !std.ArrayList(types.Instruction) 
             // Keywords
             const ki = matchesAny(s, keywords);
             if (ki >= 0) {
-                try list.append(.{
+                try list.append(allocator, .{
                     .type = .Keywords,
                     .string = s,
                     .index = ki,
@@ -130,7 +131,7 @@ pub fn create_instruction(buffer: []const u8) !std.ArrayList(types.Instruction) 
             }
 
             // Valor (identificador, true/false, etc.)
-            try list.append(.{ .type = .Value, .string = s, .index = -1 });
+            try list.append(allocator, .{ .type = .Value, .string = s, .index = -1 });
             continue;
         }
 
@@ -164,7 +165,7 @@ pub fn create_instruction(buffer: []const u8) !std.ArrayList(types.Instruction) 
             }
 
             const s = try dupStr(buffer[start..i]);
-            try list.append(.{ .type = .Value, .string = s, .index = -1 });
+            try list.append(allocator, .{ .type = .Value, .string = s, .index = -1 });
             continue;
         }
 
@@ -174,7 +175,7 @@ pub fn create_instruction(buffer: []const u8) !std.ArrayList(types.Instruction) 
             const tri = buffer[i .. i + 3];
             if (std.mem.eql(u8, tri, "<<=") or std.mem.eql(u8, tri, ">>=")) {
                 const s = try dupStr(tri);
-                try list.append(.{
+                try list.append(allocator, .{
                     .type = .Assignation,
                     .string = s,
                     .index = -1,
@@ -199,7 +200,7 @@ pub fn create_instruction(buffer: []const u8) !std.ArrayList(types.Instruction) 
                         (op[0] != '=' and op[0] != '!' and op[0] != '<' and
                             op[0] != '>'));
                     if (is_assign) {
-                        try list.append(.{
+                        try list.append(allocator, .{
                             .type = .Assignation,
                             .string = s,
                             .index = -1,
@@ -208,7 +209,7 @@ pub fn create_instruction(buffer: []const u8) !std.ArrayList(types.Instruction) 
                         matched = true;
                         break;
                     } else {
-                        try list.append(.{
+                        try list.append(allocator, .{
                             .type = .Operation,
                             .string = s,
                             .index = -1,
@@ -230,7 +231,7 @@ pub fn create_instruction(buffer: []const u8) !std.ArrayList(types.Instruction) 
 
             switch (ch) {
                 '=' => {
-                    try list.append(.{
+                    try list.append(allocator, .{
                         .type = .Assignation,
                         .string = s,
                         .index = -1,
@@ -239,7 +240,7 @@ pub fn create_instruction(buffer: []const u8) !std.ArrayList(types.Instruction) 
                     continue;
                 },
                 '+', '-', '*', '/', '%', '&', '|', '^', '~', '!', '(', ')', '<', '>' => {
-                    try list.append(.{
+                    try list.append(allocator, .{
                         .type = .Operation,
                         .string = s,
                         .index = -1,

@@ -518,10 +518,11 @@ fn parseLiteralOrIdentifier(
 }
 
 fn evalExpr(tokens: []const types.Instruction, vars: *VarMap) !Value {
-    var vals = std.ArrayList(Value).init(std.heap.page_allocator);
-    defer vals.deinit();
-    var ops = std.ArrayList(OpTag).init(std.heap.page_allocator);
-    defer ops.deinit();
+    const allocator = std.heap.page_allocator;
+    var vals = std.ArrayList(Value){};
+    defer vals.deinit(allocator);
+    var ops = std.ArrayList(OpTag){};
+    defer ops.deinit(allocator);
 
     var expect_value = true;
 
@@ -532,14 +533,14 @@ fn evalExpr(tokens: []const types.Instruction, vars: *VarMap) !Value {
         switch (tk.type) {
             .Value => {
                 const v = try parseLiteralOrIdentifier(tk, vars);
-                try vals.append(v);
+                try vals.append(allocator, v);
                 expect_value = false;
             },
             .Operation => {
                 const s = tk.string;
 
                 if (eql(s, "(")) {
-                    try ops.append(.LParen);
+                    try ops.append(allocator, .LParen);
                     expect_value = true;
                     continue;
                 }
@@ -547,23 +548,23 @@ fn evalExpr(tokens: []const types.Instruction, vars: *VarMap) !Value {
                     while (ops.items.len > 0) {
                         const top = ops.items[ops.items.len - 1];
                         if (top == .LParen) {
-                            _ = ops.pop();
+                            _ = ops.pop().?;
                             break;
                         }
-                        const op = ops.pop();
+                        const op = ops.pop().?;
                         if (op == .UMinus or op == .Not or op == .BitNot) {
                             if (vals.items.len < 1)
                                 return types.ParsingError.SyntaxError;
-                            const a = vals.pop();
-                            const r = try applyUnary(op.?, a.?);
-                            try vals.append(r);
+                            const a = vals.pop().?;
+                            const r = try applyUnary(op, a);
+                            try vals.append(allocator, r);
                         } else {
                             if (vals.items.len < 2)
                                 return types.ParsingError.SyntaxError;
-                            const b = vals.pop();
-                            const a = vals.pop();
-                            const r = try applyBinary(op.?, a.?, b.?);
-                            try vals.append(r);
+                            const b = vals.pop().?;
+                            const a = vals.pop().?;
+                            const r = try applyBinary(op, a, b);
+                            try vals.append(allocator, r);
                         }
                     }
                     expect_value = false;
@@ -590,23 +591,23 @@ fn evalExpr(tokens: []const types.Instruction, vars: *VarMap) !Value {
                     };
                     if (!cond) break;
 
-                    const op2 = ops.pop();
+                    const op2 = ops.pop().?;
                     if (op2 == .UMinus or op2 == .Not or op2 == .BitNot) {
                         if (vals.items.len < 1)
                             return types.ParsingError.SyntaxError;
-                        const a = vals.pop();
-                        const r = try applyUnary(op2.?, a.?);
-                        try vals.append(r);
+                        const a = vals.pop().?;
+                        const r = try applyUnary(op2, a);
+                        try vals.append(allocator, r);
                     } else {
                         if (vals.items.len < 2)
                             return types.ParsingError.SyntaxError;
-                        const b = vals.pop();
-                        const a = vals.pop();
-                        const r = try applyBinary(op2.?, a.?, b.?);
-                        try vals.append(r);
+                        const b = vals.pop().?;
+                        const a = vals.pop().?;
+                        const r = try applyBinary(op2, a, b);
+                        try vals.append(allocator, r);
                     }
                 }
-                try ops.append(tag);
+                try ops.append(allocator, tag);
                 expect_value = true and
                     (tag != .UMinus and tag != .Not and tag != .BitNot);
             },
@@ -617,21 +618,21 @@ fn evalExpr(tokens: []const types.Instruction, vars: *VarMap) !Value {
     }
 
     while (ops.items.len > 0) {
-        const op = ops.pop();
+        const op = ops.pop().?;
         if (op == .LParen or op == .RParen)
             return types.ParsingError.SyntaxError;
 
         if (op == .UMinus or op == .Not or op == .BitNot) {
             if (vals.items.len < 1) return types.ParsingError.SyntaxError;
-            const a = vals.pop();
-            const r = try applyUnary(op.?, a.?);
-            try vals.append(r);
+            const a = vals.pop().?;
+            const r = try applyUnary(op, a);
+            try vals.append(allocator, r);
         } else {
             if (vals.items.len < 2) return types.ParsingError.SyntaxError;
-            const b = vals.pop();
-            const a = vals.pop();
-            const r = try applyBinary(op.?, a.?, b.?);
-            try vals.append(r);
+            const b = vals.pop().?;
+            const a = vals.pop().?;
+            const r = try applyBinary(op, a, b);
+            try vals.append(allocator, r);
         }
     }
 

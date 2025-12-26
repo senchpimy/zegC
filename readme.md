@@ -20,7 +20,7 @@ Implementar un compilador C minimalista en Zig, desde el análisis léxico y sin
 
 ## Compilación
 
-Requiere **Zig v0.12+**
+Requiere **Zig v0.15+**
 
 ```bash
 zig build run

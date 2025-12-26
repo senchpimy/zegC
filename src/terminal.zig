@@ -1,7 +1,7 @@
 // src/terminal.zig
 const std = @import("std");
 
-const c = @cImport({
+pub const c = @cImport({
     @cInclude("termios.h");
     @cInclude("unistd.h");
 });
@@ -46,9 +46,9 @@ pub fn initTerminal() !Init {
 }
 
 pub fn prompt(p: *Prompt) !void {
-    const out = std.io.getStdOut().writer();
+    var out = std.fs.File.stdout().writer(&.{});
     switch (p.*) {
-        .start => try out.print("\r\nc11> ", .{}),
-        .cont => try out.print("\r\n...> ", .{}),
+        .start => try out.interface.print("\r\nc11> ", .{}),
+        .cont => try out.interface.print("\r\n...> ", .{}),
     }
 }
