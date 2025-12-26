@@ -28,65 +28,113 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
+    var history = std.ArrayList([]u8){};
+    defer {
+        for (history.items) |h| allocator.free(h);
+        history.deinit(allocator);
+    }
+
     main_loop: while (true) {
         var line = std.ArrayList(u8){};
         defer line.deinit(allocator);
+        var cursor_pos: usize = 0;
 
-        // 1. Imprime el prompt UNA VEZ por línea de comando.
         try stdout.interface.print("c11> ", .{});
 
-        // 2. Bucle INTERNO para leer caracteres hasta presionar Enter.
         while (true) {
             var char_buf: [1]u8 = undefined;
             const bytes_read = try init.tty.read(&char_buf);
 
-            // Si por alguna razón no se lee nada (improbable con nuestra config), continuamos.
             if (bytes_read == 0) continue;
-
             const char = char_buf[0];
 
             switch (char) {
-                // Enter: Fin de la línea
-                '\r' => {
-                    try stdout.interface.print("\r\n", .{}); // Nueva línea en la salida
-                    break; // Rompe el bucle interno
-                },
-
-                // Ctrl+C: Salir del programa
-                3 => {
-                    try stdout.interface.print("\r\n", .{});
-                    return; // Sale de main
-                },
-
-                // Ctrl+D: Final de entrada
-                4 => {
-                    try stdout.interface.print("\r\n", .{});
-                    return;
-                },
-
-                // Backspace (ASCII 127)
-                127 => {
-                    if (line.items.len > 0) {
-                        _ = line.pop();
-                        // Mueve el cursor atrás, imprime un espacio, mueve el cursor atrás de nuevo.
-                        try stdout.interface.print("\x1B[D \x1B[D", .{});
+                // Secuencia de escape (Flechas, etc)
+                '\x1B' => {
+                    var seq: [2]u8 = undefined;
+                    if ((try init.tty.read(&seq)) >= 2) {
+                        if (seq[0] == '[') {
+                            switch (seq[1]) {
+                                'A' => { // Flecha Arriba (Historial)
+                                    if (history.items.len > 0) {
+                                        // Borrar visualmente hasta el inicio del prompt
+                                        while (cursor_pos > 0) {
+                                            try stdout.interface.print("\x1B[D", .{});
+                                            cursor_pos -= 1;
+                                        }
+                                        try stdout.interface.print("\x1B[K", .{}); // Limpiar hasta el final
+                                        
+                                        line.clearRetainingCapacity();
+                                        const last = history.items[history.items.len - 1];
+                                        try line.appendSlice(allocator, last);
+                                        try stdout.interface.print("{s}", .{last});
+                                        cursor_pos = line.items.len;
+                                    }
+                                },
+                                'C' => { // Flecha Derecha
+                                    if (cursor_pos < line.items.len) {
+                                        try stdout.interface.print("\x1B[C", .{});
+                                        cursor_pos += 1;
+                                    }
+                                },
+                                'D' => { // Flecha Izquierda
+                                    if (cursor_pos > 0) {
+                                        try stdout.interface.print("\x1B[D", .{});
+                                        cursor_pos -= 1;
+                                    }
+                                },
+                                else => {},
+                            }
+                        }
                     }
                 },
 
-                // Caracter normal: Añádelo a la línea y muéstralo en pantalla.
+                // Enter: Fin de la línea
+                '\r' => {
+                    try stdout.interface.print("\r\n", .{});
+                    break;
+                },
+
+                // Ctrl+C: Salir
+                3 => {
+                    try stdout.interface.print("\r\n", .{});
+                    return;
+                },
+                
+                // Backspace
+                127 => {
+                    if (cursor_pos > 0) {
+                        _ = line.orderedRemove(cursor_pos - 1);
+                        cursor_pos -= 1;
+                        // Mover cursor atrás, redibujar el resto, limpiar final, volver a posición
+                        try stdout.interface.print("\x1B[D\x1B[K{s}", .{line.items[cursor_pos..]});
+                        var j: usize = 0;
+                        while (j < line.items.len - cursor_pos) : (j += 1) {
+                            try stdout.interface.print("\x1B[D", .{});
+                        }
+                    }
+                },
+
                 else => {
-                    try line.append(allocator, char);
-                    try stdout.interface.print("{c}", .{char});
+                    try line.insert(allocator, cursor_pos, char);
+                    // Imprimir carácter e insertar en medio redibujando el resto
+                    try stdout.interface.print("{c}{s}", .{ char, line.items[cursor_pos + 1 ..] });
+                    cursor_pos += 1;
+                    // Volver el cursor a su sitio si no estamos al final
+                    var j: usize = 0;
+                    while (j < line.items.len - cursor_pos) : (j += 1) {
+                        try stdout.interface.print("\x1B[D", .{});
+                    }
                 },
             }
         }
 
-        // 3. Ahora que tienes la línea completa, procésala.
-        if (std.mem.eql(u8, line.items, "quit")) {
-            break :main_loop;
-        }
-
         if (line.items.len > 0) {
+            if (std.mem.eql(u8, line.items, "quit")) break :main_loop;
+
+            const h_entry = try allocator.dupe(u8, line.items);
+            try history.append(allocator, h_entry);
+
             parse_str(line.items) catch |err| {
                 try stdout.interface.print("Error: {}\r\n", .{err});
             };
