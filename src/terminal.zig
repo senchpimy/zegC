@@ -1,97 +1,54 @@
+// src/terminal.zig
 const std = @import("std");
-const fs = std.fs;
-const os = std.os;
-const io = std.io;
 
-pub const Prompt = enum { start, none, cont };
-
-var buf: [100]u8 = undefined;
-var npromt_v: Prompt = .start;
-var mb_index: u32 = 0;
-const stdout = io.getStdOut().writer();
 const c = @cImport({
     @cInclude("termios.h");
+    @cInclude("unistd.h");
 });
 
-pub fn initTerminal() !struct { tty: fs.File, termios: os.linux.termios } {
-    var termios: std.os.linux.termios = undefined;
-    const tty = fs.cwd().openFile("/dev/tty", fs.File.OpenFlags{ .mode = .read_write }) catch |err| switch (err) {
-        error.NoDevice => return error.NoTty,
-        else => return err,
-    };
+pub const Prompt = enum { start, cont };
 
-    const ret = std.os.linux.tcgetattr(tty.handle, &termios);
-    if (ret != 0) {
-        std.debug.print("tcgetattr failed with code {}\n", .{ret});
+pub const Init = struct {
+    tty: std.fs.File,
+    termios: c.termios,
+};
+
+pub fn initTerminal() !Init {
+    var tty = try std.fs.openFileAbsolute("/dev/tty", .{
+        .mode = .read_write,
+    });
+
+    var orig: c.termios = undefined;
+    if (c.tcgetattr(tty.handle, &orig) != 0) {
+        tty.close();
         return error.TcgetattrFailed;
     }
 
-    var raw = termios;
+    var raw = orig;
 
-    raw.lflag.ECHO = false;
-    raw.lflag.ICANON = false;
-    raw.lflag.ISIG = false;
-    raw.lflag.IEXTEN = false;
+    // --- CORRECCIÓN AQUÍ ---
+    // Hacemos un cast al tipo correcto ANTES de la negación a nivel de bits.
+    raw.c_lflag &= ~@as(c.tcflag_t, c.ECHO | c.ICANON | c.IEXTEN | c.ISIG);
+    raw.c_iflag &= ~@as(c.tcflag_t, c.IXON | c.ICRNL | c.BRKINT | c.INPCK | c.ISTRIP);
+    raw.c_oflag &= ~@as(c.tcflag_t, c.OPOST);
+    // --- FIN DE LA CORRECCIÓN ---
 
-    raw.iflag.IXON = false;
-    raw.iflag.ICRNL = false;
-    raw.iflag.BRKINT = false;
-    raw.iflag.INPCK = false;
-    raw.iflag.ISTRIP = false;
+    raw.c_cflag |= c.CS8;
+    raw.c_cc[c.VMIN] = 1;
+    raw.c_cc[c.VTIME] = 0;
 
-    raw.cc[c.VTIME] = 0;
-    raw.cc[c.VMIN] = 1;
-    _ = os.linux.tcsetattr(tty.handle, .FLUSH, &raw);
-    return .{ .tty = tty, .termios = termios };
-}
-
-pub fn restoreTerminal(original: os.termios) !void {
-    const tty = try fs.cwd().openFile("/dev/tty", .{ .mode = .read_write });
-    defer tty.close();
-    try os.tcsetattr(tty.handle, .FLUSH, original);
-}
-
-pub fn prompt(promt_v: *Prompt) !void {
-    const prompt_str = switch (promt_v.*) {
-        .start => ">>>",
-        .cont => "\n...",
-        .none => return,
-    };
-    try stdout.print("{s}", .{prompt_str});
-    promt_v.* = .none;
-}
-
-pub fn handleInput(char: u8, promt_v: Prompt) !?[]const u8 {
-    if (char == 0x1B) { // Escape sequence
-        return null;
-    } else if (char == 3) { // Ctrl+C
-        return error.Terminate;
-    } else if (char == 0x7F or char == 0x08) { // Backspace
-        if (mb_index > 0) {
-            mb_index -= 1;
-            buf[mb_index] = 0;
-            try stdout.print("\x1B[D \x1B[D", .{});
-        }
-    } else if (char == '\r') { // Enter
-        if (mb_index > 0 and buf[mb_index - 1] == ';') {
-            const input = buf[0..mb_index];
-            promt_v = .start;
-            return input;
-        }
-        promt_v = .cont;
-    } else if (std.ascii.isASCII(char)) {
-        buf[mb_index] = char;
-        mb_index += 1;
-        try stdout.print("{c}", .{char});
+    if (c.tcsetattr(tty.handle, c.TCSANOW, &raw) != 0) {
+        tty.close();
+        return error.TcsetattrFailed;
     }
-    return null;
+
+    return .{ .tty = tty, .termios = orig };
 }
 
-pub fn getCurrentBuffer() []const u8 {
-    return buf[0..mb_index];
-}
-
-pub fn resetBuffer() void {
-    mb_index = 0;
-    @memset(&buf, 0);
+pub fn prompt(p: *Prompt) !void {
+    const out = std.io.getStdOut().writer();
+    switch (p.*) {
+        .start => try out.print("\r\nc11> ", .{}),
+        .cont => try out.print("\r\n...> ", .{}),
+    }
 }

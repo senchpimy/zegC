@@ -1,73 +1,256 @@
 const std = @import("std");
+const types = @import("types.zig");
 const debug = std.debug;
 
-const types = @import("types.zig");
-
-pub const primitive_types = [_][]const u8{ "int", "char", "long", "bool", "void", "double", "float" };
+const primitive_types = [_][]const u8{
+    "int", "char", "long", "bool", "void", "double", "float",
+};
 const keywords = [_][]const u8{ "if", "else", "for", "while", "do", "struct" };
-const asignation_operations = [_][]const u8{ "=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "<<=", ">>=" };
-const primitive_operations = [_][]const u8{ "+", "-", "*", "/", "%", "&&", "||", "!", "==", "!=", ">", "<", ">=", "<=", "&", "|", "^", "~", "<<", ">>" };
+
+fn isSpace(c: u8) bool {
+    return std.ascii.isWhitespace(c);
+}
+
+fn isDigit(c: u8) bool {
+    return c >= '0' and c <= '9';
+}
+
+fn isIdentStart(c: u8) bool {
+    return (c == '_') or (c >= 'A' and c <= 'Z') or (c >= 'a' and c <= 'z');
+}
+
+fn isIdentPart(c: u8) bool {
+    return isIdentStart(c) or isDigit(c);
+}
+
+fn matchesAny(s: []const u8, arr: anytype) i16 {
+    for (arr, 0..) |a, i| {
+        if (std.mem.eql(u8, s, a)) return @intCast(i);
+    }
+    return -1;
+}
+
+fn dupStr(s: []const u8) ![]u8 {
+    return try std.heap.page_allocator.dupe(u8, s);
+}
 
 pub fn create_instruction(buffer: []const u8) !std.ArrayList(types.Instruction) {
     var list = std.ArrayList(types.Instruction).init(std.heap.page_allocator);
-    var instructions = std.mem.tokenizeScalar(u8, buffer, ';');
 
-    while (instructions.next()) |intrs| {
-        var splits = std.mem.splitAny(u8, std.mem.trim(u8, intrs, &std.ascii.whitespace), &std.ascii.whitespace);
-        while (splits.next()) |str| {
-            if (str.len == 0) {
+    var i: usize = 0;
+    const n = buffer.len;
+    while (i < n) {
+        const c = buffer[i];
+
+        // Fin de sentencia
+        if (c == ';') break;
+
+        // Saltar espacios
+        if (isSpace(c)) {
+            i += 1;
+            continue;
+        }
+
+        // Comentarios simples // ... (opcional)
+        if (c == '/' and i + 1 < n and buffer[i + 1] == '/') {
+            // Rest of line is comment; stop.
+            break;
+        }
+
+        // Char literal
+        if (c == '\'') {
+            const start = i;
+            i += 1;
+            if (i >= n) return error.InvalidCharacter;
+            if (buffer[i] == '\\') {
+                i += 1;
+                if (i >= n) return error.InvalidCharacter;
+                // escape + following char(s)
+                if (buffer[i] == 'x') {
+                    i += 1;
+                    // hex digits (1-2) until closing quote
+                    var hexc: usize = 0;
+                    while (i < n and hexc < 2) : (i += 1) {
+                        const d = buffer[i];
+                        _ = std.fmt.charToDigit(d, 16) catch break;
+                        hexc += 1;
+                    }
+                } else {
+                    // common escape, just skip one char
+                    i += 0;
+                }
+                if (i >= n) return error.InvalidCharacter;
+            } else {
+                // regular char
+                if (i >= n) return error.InvalidCharacter;
+                i += 0;
+            }
+            // Buscar cierre '
+            i += 1;
+            if (i >= n or buffer[i] != '\'')
+                return error.InvalidCharacter;
+            i += 1;
+            const s = try dupStr(buffer[start..i]);
+            try list.append(.{
+                .type = .Value,
+                .string = s,
+                .index = -1,
+            });
+            continue;
+        }
+
+        // Identificadores o palabras clave o tipos
+        if (isIdentStart(c)) {
+            const start = i;
+            i += 1;
+            while (i < n and isIdentPart(buffer[i])) : (i += 1) {}
+            const s = try dupStr(buffer[start..i]);
+
+            // Tipos primitivos
+            const ti = matchesAny(s, primitive_types);
+            if (ti >= 0) {
+                try list.append(.{
+                    .type = .TypeDeclaration,
+                    .string = s,
+                    .index = ti,
+                });
                 continue;
             }
 
-            const string = try std.heap.page_allocator.dupe(u8, str);
-            var found_token = false;
+            // Keywords
+            const ki = matchesAny(s, keywords);
+            if (ki >= 0) {
+                try list.append(.{
+                    .type = .Keywords,
+                    .string = s,
+                    .index = ki,
+                });
+                debug.print("Keyword {s}", .{s});
+                continue;
+            }
 
-            for (primitive_types, 0..) |typ, i| {
-                if (std.mem.eql(u8, string, typ)) {
-                    try list.append(types.Instruction{ .type = .TypeDeclaration, .string = string, .index = @intCast(i) });
-                    found_token = true;
-                    break;
+            // Valor (identificador, true/false, etc.)
+            try list.append(.{ .type = .Value, .string = s, .index = -1 });
+            continue;
+        }
+
+        // Números (enteros, floats, con sufijos f/F/l/L)
+        if (isDigit(c) or c == '.') {
+            const start = i;
+            var has_dot_or_exp = false;
+
+            if (c == '.') {
+                i += 1;
+                while (i < n and isDigit(buffer[i])) : (i += 1) {}
+            } else {
+                while (i < n and isDigit(buffer[i])) : (i += 1) {}
+                if (i < n and buffer[i] == '.') {
+                    has_dot_or_exp = true;
+                    i += 1;
+                    while (i < n and isDigit(buffer[i])) : (i += 1) {}
                 }
             }
-            if (found_token) continue;
+            if (i < n and (buffer[i] == 'e' or buffer[i] == 'E')) {
+                has_dot_or_exp = true;
+                i += 1;
+                if (i < n and (buffer[i] == '+' or buffer[i] == '-')) i += 1;
+                while (i < n and isDigit(buffer[i])) : (i += 1) {}
+            }
+            // Sufijos f/F o l/L
+            if (i < n and (buffer[i] == 'f' or buffer[i] == 'F' or
+                buffer[i] == 'l' or buffer[i] == 'L'))
+            {
+                i += 1;
+            }
 
-            for (asignation_operations, 0..) |op, i| {
-                if (std.mem.eql(u8, string, op)) {
-                    try list.append(types.Instruction{ .type = .Assignation, .string = string, .index = @intCast(i) });
-                    found_token = true;
-                    break;
+            const s = try dupStr(buffer[start..i]);
+            try list.append(.{ .type = .Value, .string = s, .index = -1 });
+            continue;
+        }
+
+        // Operadores y paréntesis (chequear primero los más largos)
+        // 3-char: <<=, >>=
+        if (i + 2 < n) {
+            const tri = buffer[i .. i + 3];
+            if (std.mem.eql(u8, tri, "<<=") or std.mem.eql(u8, tri, ">>=")) {
+                const s = try dupStr(tri);
+                try list.append(.{
+                    .type = .Assignation,
+                    .string = s,
+                    .index = -1,
+                });
+                i += 3;
+                continue;
+            }
+        }
+
+        // 2-char operadores
+        if (i + 1 < n) {
+            const two = buffer[i .. i + 2];
+            const two_ops = [_][]const u8{
+                "==", "!=", ">=", "<=", "&&", "||", "<<", ">>", "+=", "-=",
+                "*=", "/=", "%=", "&=", "|=",
+            };
+            var matched: bool = false;
+            for (two_ops) |op| {
+                if (std.mem.eql(u8, two, op)) {
+                    const s = try dupStr(two);
+                    const is_assign = (op.len == 2 and op[1] == '=' and
+                        (op[0] != '=' and op[0] != '!' and op[0] != '<' and
+                            op[0] != '>'));
+                    if (is_assign) {
+                        try list.append(.{
+                            .type = .Assignation,
+                            .string = s,
+                            .index = -1,
+                        });
+                        i += 2;
+                        matched = true;
+                        break;
+                    } else {
+                        try list.append(.{
+                            .type = .Operation,
+                            .string = s,
+                            .index = -1,
+                        });
+                        i += 2;
+                        matched = true;
+                        break;
+                    }
                 }
             }
-            if (found_token) continue;
+            if (matched) continue;
+        }
 
-            for (keywords, 0..) |kw, i| {
-                if (std.mem.eql(u8, string, kw)) {
-                    try list.append(types.Instruction{ .type = .Keywords, .string = string, .index = @intCast(i) });
-                    found_token = true;
-                    debug.print("Keyword {s}", .{string});
-                    break;
-                }
+        // 1-char operadores y paréntesis
+        {
+            const ch = buffer[i];
+            const one = buffer[i .. i + 1];
+            const s = try dupStr(one);
+
+            switch (ch) {
+                '=' => {
+                    try list.append(.{
+                        .type = .Assignation,
+                        .string = s,
+                        .index = -1,
+                    });
+                    i += 1;
+                    continue;
+                },
+                '+', '-', '*', '/', '%', '&', '|', '^', '~', '!', '(', ')', '<', '>' => {
+                    try list.append(.{
+                        .type = .Operation,
+                        .string = s,
+                        .index = -1,
+                    });
+                    i += 1;
+                    continue;
+                },
+                else => return error.InvalidCharacter,
             }
-            if (found_token) continue;
-
-            try list.append(types.Instruction{ .type = .Value, .string = string, .index = -1 });
         }
     }
+
     return list;
-}
-
-pub fn match_type(index: i16) types.Type {
-    return @enumFromInt(index);
-}
-
-pub fn match_payload(t: types.Type) types.Payload {
-    return switch (t) {
-        .int => types.Payload{ .int = undefined },
-        .char => types.Payload{ .char = undefined },
-        .long => types.Payload{ .long = undefined },
-        .boolean => types.Payload{ .boolean = undefined },
-        .void => types.Payload{ .void = undefined },
-        .double => types.Payload{ .double = undefined },
-        .float => types.Payload{ .float = undefined },
-    };
 }

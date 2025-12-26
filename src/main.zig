@@ -1,3 +1,4 @@
+// main.zig
 const std = @import("std");
 const debug = std.debug;
 const fs = std.fs;
@@ -12,93 +13,99 @@ const types = @import("types.zig");
 
 const c = @cImport({
     @cInclude("termios.h");
+    @cInclude("unistd.h");
 });
 
 const stdout = std.io.getStdOut().writer();
 pub var buf: [100]u8 = undefined;
 var promt_v: terminal.Prompt = .start;
-var variables = std.StringHashMap(types.Variable).init(std.heap.page_allocator);
-pub var mb_index: u32 = 0; //main buffer index
+var variables = std.StringHashMap(types.Variable).init(
+    std.heap.page_allocator,
+);
+pub var mb_index: usize = 0; // main buffer index
 
 pub fn main() !void {
-    var init = terminal.initTerminal() catch |err| switch (err) {
-        error.NoTty => {
-            std.debug.print("No TTY available. Exiting.\n", .{});
-            return;
-        },
-        else => |e| return e,
-    };
+    const init = try terminal.initTerminal();
     defer {
+        _ = c.tcsetattr(init.tty.handle, c.TCSANOW, &init.termios);
         init.tty.close();
     }
 
-    while (true) {
-        try terminal.prompt(&promt_v);
-        var buffer: [1]u8 = undefined;
-        _ = try init.tty.read(&buffer);
-        const char = buffer[0];
-        if (char == '\x1B') {
-            _ = try init.tty.read(&buffer);
-            _ = try init.tty.read(&buffer);
-            if (buffer[0] == 'D') { // Izquierda
-                std.debug.print("\x1B[D", .{});
-            } else if (buffer[0] == 'C') { // Derecha
-                std.debug.print("\x1B[C", .{});
-            } else if (buffer[0] == 'A') {
-                debug.print("Arriba\r\n", .{});
-            } else if (buffer[0] == 'B') {
-                debug.print("Abajo\r\n", .{});
-            } else {
-                debug.print("cahr {d}\r\n", .{buffer[0]});
+    // Usamos un ArrayList para construir la línea de entrada dinámicamente.
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    main_loop: while (true) {
+        var line = std.ArrayList(u8).init(allocator);
+        defer line.deinit();
+
+        // 1. Imprime el prompt UNA VEZ por línea de comando.
+        try std.io.getStdOut().writer().print("c11> ", .{});
+
+        // 2. Bucle INTERNO para leer caracteres hasta presionar Enter.
+        while (true) {
+            var char_buf: [1]u8 = undefined;
+            const bytes_read = try init.tty.read(&char_buf);
+
+            // Si por alguna razón no se lee nada (improbable con nuestra config), continuamos.
+            if (bytes_read == 0) continue;
+
+            const char = char_buf[0];
+
+            switch (char) {
+                // Enter: Fin de la línea
+                '\r' => {
+                    try std.io.getStdOut().writer().print("\r\n", .{}); // Nueva línea en la salida
+                    break; // Rompe el bucle interno
+                },
+
+                // Ctrl+C: Salir del programa
+                3 => {
+                    try std.io.getStdOut().writer().print("\r\n", .{});
+                    return; // Sale de main
+                },
+
+                // Ctrl+D: Final de entrada
+                4 => {
+                    try std.io.getStdOut().writer().print("\r\n", .{});
+                    return;
+                },
+
+                // Backspace (ASCII 127)
+                127 => {
+                    if (line.items.len > 0) {
+                        _ = line.pop();
+                        // Mueve el cursor atrás, imprime un espacio, mueve el cursor atrás de nuevo.
+                        try std.io.getStdOut().writer().print("\x1B[D \x1B[D", .{});
+                    }
+                },
+
+                // Caracter normal: Añádelo a la línea y muéstralo en pantalla.
+                else => {
+                    try line.append(char);
+                    try std.io.getStdOut().writer().print("{c}", .{char});
+                },
             }
-        } else if (char == 3) { // Ctrl+C
-            break;
-        } else if (std.ascii.isASCII(char)) {
-            if (char == '\r') { // Enter
-                if (mb_index > 0 and buf[mb_index - 1] == ';') {
-                    parse_str() catch |err| {
-                        try stdout.print("\nError: {any}\n", .{err});
-                    };
-                    promt_v = .start;
-                    @memset(&buf, 0);
-                    mb_index = 0;
-                    try stdout.print("\n", .{});
-                    continue;
-                }
-                promt_v = .cont;
-                try terminal.prompt(&promt_v);
-                continue;
-            } else if (char == 0x7F or char == 0x08) { // Backspace (127 o 8)
-                if (mb_index > 0) {
-                    mb_index -= 1;
-                    buf[mb_index] = 0;
-                    try stdout.print("\x08 \x08", .{});
-                }
-            } else {
-                if (mb_index < buf.len) {
-                    get_string(mb_index, char);
-                    try stdout.print("{c}", .{char});
-                    mb_index += 1;
-                }
-            }
-        } else {
-            debug.print("novalue: {} {s}\r\n", .{ buffer[0], buffer });
         }
-    }
-    _ = os.linux.tcsetattr(init.tty.handle, .FLUSH, &init.termios);
-    var iter = variables.iterator();
-    debug.print("\n", .{});
-    while (iter.next()) |key| {
-        debug.print("VARIABLE {s} {any}\n", .{ key.key_ptr.*, key.value_ptr.* });
+
+        // 3. Ahora que tienes la línea completa, procésala.
+        // `line.items` es un `[]u8` con el comando del usuario.
+        if (std.mem.eql(u8, line.items, "quit")) {
+            break :main_loop; // Salimos del bucle principal
+        }
+
+        // Simplemente imprimimos la línea recibida como demostración.
+        try std.io.getStdOut().writer().print("Comando recibido: '{s}'\r\n", .{line.items});
     }
 }
 
-fn get_string(index: u32, char: u8) void {
+fn get_string(index: usize, char: u8) void {
     buf[index] = char;
 }
 
 fn parse_str() !void {
-    const instruction_list = try lexer.create_instruction(buf[0..mb_index]);
+    var instruction_list = try lexer.create_instruction(buf[0..mb_index]);
     defer {
         for (instruction_list.items) |item| {
             std.heap.page_allocator.free(item.string);
@@ -106,126 +113,12 @@ fn parse_str() !void {
         instruction_list.deinit();
     }
 
-    const slice = instruction_list.items;
-    if (slice.len == 0) return; // No hacer nada si la entrada está vacía (ej. ";")
+    const tokens = instruction_list.items;
+    if (tokens.len == 0) return;
 
-    if (slice[0].type == .TypeDeclaration) {
-        if (slice.len < 2) {
-            return lexer.ParsingError.MissingVariableName;
-        }
-        if (slice.len > 3 and slice[2].type == .Assignation) {
-            const new_var_type = lexer.match_type(slice[0].index);
-            const f = try match_payload_value(new_var_type, slice[3]);
-            const new_var = types.Variable{ .type = new_var_type, .value = f };
-            try variables.put(slice[1].string, new_var);
-            try stdout.print("\nVariable '{s}' creada con valor.", .{slice[1].string});
-        } else {
-            const t = lexer.match_type(slice[0].index);
-            const p = lexer.match_payload(t);
-            const v: types.Variable = types.Variable{ .type = t, .value = p };
-            try variables.put(slice[1].string, v);
-            try stdout.print("\nVariable '{s}' declarada.", .{slice[1].string});
-        }
+    const res_opt = try evaluate.exec(tokens, &variables);
+    if (res_opt) |res| {
+        try stdout.print("=> ", .{});
+        try evaluate.printValue(stdout, res);
     }
-}
-
-fn match_payload_value(t: lexer.Type, v: lexer.Instruction) !lexer.Payload {
-    std.debug.print("TYpe {any}\n", .{t});
-    std.debug.print("Ins {any}\n", .{v});
-    var p: lexer.Payload = undefined;
-    if (v.type != .Value) {
-        return lexer.ParsingError.InvalidValue;
-    }
-
-    switch (t) {
-        .int => {
-            p = lexer.Payload{ .int = undefined };
-        },
-        .char => {
-            p = lexer.Payload{ .char = undefined };
-        },
-        .long => {
-            p = lexer.Payload{ .long = undefined };
-        },
-        .boolean => {
-            p = lexer.Payload{ .boolean = undefined };
-        },
-        .void => {
-            p = lexer.Payload{ .void = undefined };
-        },
-        .double => {
-            p = lexer.Payload{ .double = undefined };
-        },
-        .float => {
-            p = lexer.Payload{ .float = undefined };
-        },
-    }
-
-    switch (v.string[0]) {
-        '\'' => { //char||[]char
-            // Lógica para literales char
-        },
-        else => {
-            if (std.ascii.isDigit(v.string[0])) { // Es un literal numérico
-                switch (t) {
-                    .int => p.int = try std.fmt.parseInt(i32, v.string, 10),
-                    .char => return lexer.ParsingError.TypeMismatch,
-                    .long => p.long = try std.fmt.parseInt(i64, v.string, 10),
-                    .boolean => return lexer.ParsingError.TypeMismatch,
-                    .double => p.double = try std.fmt.parseFloat(f64, v.string),
-                    .float => p.float = try std.fmt.parseFloat(f32, v.string),
-                    else => {},
-                }
-            } else { // Es un nombre de variable
-                // --- LÓGICA RESTAURADA ---
-                if (variables.contains(v.string)) { //Asignacion a variable
-                    const tmp = variables.get(v.string).?;
-
-                    // Para que funcione, hacemos una asignación simple si los tipos coinciden.
-                    if (tmp.type == t) {
-                        p = tmp.value;
-                    } else {
-                        // Aquí se mantiene el bloque comentado como andamio para el futuro casting de tipos.
-                        //_ = tmp;
-                        //switch (tmp.value) {
-                        //    .int => |val| switch (t) {
-                        //        .int => p.int = val,
-                        //        .double => p.double = @as(f64, val),
-                        //        else => {}, // handle any other types
-                        //    },
-                        //    .char => |val| switch (t) {
-                        //        .char => p.char = val,
-                        //        else => {}, // handle any other types
-                        //    },
-                        //    .long => |val| switch (t) {
-                        //        .long => p.long = val,
-                        //        .double => p.double = @as(f64, val),
-                        //        else => {}, // handle any other types
-                        //    },
-                        //    .boolean => |val| switch (t) {
-                        //        .boolean => p.boolean = val,
-                        //        else => {}, // handle any other types
-                        //    },
-                        //    .double => |val| switch (t) {
-                        //        .double => p.double = val,
-                        //        .int => p.double = @as(i16, val),
-                        //        .long => p.long = @as(i64, val),
-                        //        else => {}, // handle any other types
-                        //    },
-                        //    .float => |val| switch (t) {
-                        //        .float => p.float = val,
-                        //        .int => p.float = @as(i32, val),
-                        //        else => {}, // handle any other types
-                        //    },
-                        //    else => {}, // handle any other types
-                        //}
-                        return lexer.ParsingError.TypeMismatch; // Por ahora, si los tipos no coinciden, es un error.
-                    }
-                } else {
-                    return lexer.ParsingError.UndefinedVariable;
-                }
-            }
-        },
-    }
-    return p;
 }
